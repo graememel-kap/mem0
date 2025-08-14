@@ -11,6 +11,7 @@ from mem0.vector_stores.base import VectorStoreBase
 try:
     from azure.core.credentials import AzureKeyCredential
     from azure.core.exceptions import ResourceNotFoundError
+    from azure.identity import DefaultAzureCredential
     from azure.search.documents import SearchClient
     from azure.search.documents.indexes import SearchIndexClient
     from azure.search.documents.indexes.models import (
@@ -27,7 +28,7 @@ try:
     from azure.search.documents.models import VectorizedQuery
 except ImportError:
     raise ImportError(
-        "The 'azure-search-documents' library is required. Please install it using 'pip install azure-search-documents==11.5.2'."
+        "The 'azure-search-documents' and 'azure-identity' libraries are required. Please install them using 'pip install azure-search-documents==11.5.2 azure-identity'."
     )
 
 logger = logging.getLogger(__name__)
@@ -44,12 +45,13 @@ class AzureAISearch(VectorStoreBase):
         self,
         service_name,
         collection_name,
-        api_key,
-        embedding_model_dims,
+        api_key=None,
+        embedding_model_dims=None,
         compression_type: Optional[str] = None,
         use_float16: bool = False,
         hybrid_search: bool = False,
         vector_filter_mode: Optional[str] = None,
+        use_managed_identity: bool = False,
     ):
         """
         Initialize the Azure AI Search vector store.
@@ -57,7 +59,8 @@ class AzureAISearch(VectorStoreBase):
         Args:
             service_name (str): Azure AI Search service name.
             collection_name (str): Index name.
-            api_key (str): API key for the Azure AI Search service.
+            api_key (str, optional): API key for the Azure AI Search service.
+                Required if use_managed_identity is False.
             embedding_model_dims (int): Dimension of the embedding vector.
             compression_type (Optional[str]): Specifies the type of quantization to use.
                 Allowed values are None (no quantization), "scalar", or "binary".
@@ -65,6 +68,8 @@ class AzureAISearch(VectorStoreBase):
                 (Note: This flag is preserved from the initial implementation per feedback.)
             hybrid_search (bool): Whether to use hybrid search. Default is False.
             vector_filter_mode (Optional[str]): Mode for vector filtering. Default is "preFilter".
+            use_managed_identity (bool): Whether to use Azure Managed Identity for authentication.
+                When True, api_key is ignored. Default is False.
         """
         self.service_name = service_name
         self.api_key = api_key
@@ -76,15 +81,24 @@ class AzureAISearch(VectorStoreBase):
         self.use_float16 = use_float16
         self.hybrid_search = hybrid_search
         self.vector_filter_mode = vector_filter_mode
+        self.use_managed_identity = use_managed_identity
+
+        # Validate authentication parameters
+        if not use_managed_identity and not api_key:
+            raise ValueError("api_key is required when use_managed_identity is False")
+
+        # Create clients using credential
+        credential = self._create_credential()
+        service_endpoint = f"https://{service_name}.search.windows.net"
 
         self.search_client = SearchClient(
-            endpoint=f"https://{service_name}.search.windows.net",
+            endpoint=service_endpoint,
             index_name=self.index_name,
-            credential=AzureKeyCredential(api_key),
+            credential=credential,
         )
         self.index_client = SearchIndexClient(
-            endpoint=f"https://{service_name}.search.windows.net",
-            credential=AzureKeyCredential(api_key),
+            endpoint=service_endpoint,
+            credential=credential,
         )
 
         self.search_client._client._config.user_agent_policy.add_user_agent("mem0")
@@ -93,6 +107,13 @@ class AzureAISearch(VectorStoreBase):
         collections = self.list_cols()
         if collection_name not in collections:
             self.create_col()
+
+    def _create_credential(self):
+        """Create the appropriate credential based on authentication method."""
+        if self.use_managed_identity:
+            return DefaultAzureCredential()
+        else:
+            return AzureKeyCredential(self.api_key)
 
     def create_col(self):
         """Create a new index in Azure AI Search."""
@@ -126,9 +147,15 @@ class AzureAISearch(VectorStoreBase):
         # If no compression is desired, compression_configurations remains empty.
         fields = [
             SimpleField(name="id", type=SearchFieldDataType.String, key=True),
-            SimpleField(name="user_id", type=SearchFieldDataType.String, filterable=True),
-            SimpleField(name="run_id", type=SearchFieldDataType.String, filterable=True),
-            SimpleField(name="agent_id", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(
+                name="user_id", type=SearchFieldDataType.String, filterable=True
+            ),
+            SimpleField(
+                name="run_id", type=SearchFieldDataType.String, filterable=True
+            ),
+            SimpleField(
+                name="agent_id", type=SearchFieldDataType.String, filterable=True
+            ),
             SearchField(
                 name="vector",
                 type=vector_type,
@@ -136,7 +163,9 @@ class AzureAISearch(VectorStoreBase):
                 vector_search_dimensions=self.embedding_model_dims,
                 vector_search_profile_name="my-vector-config",
             ),
-            SearchField(name="payload", type=SearchFieldDataType.String, searchable=True),
+            SearchField(
+                name="payload", type=SearchFieldDataType.String, searchable=True
+            ),
         ]
 
         vector_search = VectorSearch(
@@ -144,13 +173,17 @@ class AzureAISearch(VectorStoreBase):
                 VectorSearchProfile(
                     name="my-vector-config",
                     algorithm_configuration_name="my-algorithms-config",
-                    compression_name=compression_name if self.compression_type != "none" else None,
+                    compression_name=(
+                        compression_name if self.compression_type != "none" else None
+                    ),
                 )
             ],
             algorithms=[HnswAlgorithmConfiguration(name="my-algorithms-config")],
             compressions=compression_configurations,
         )
-        index = SearchIndex(name=self.index_name, fields=fields, vector_search=vector_search)
+        index = SearchIndex(
+            name=self.index_name, fields=fields, vector_search=vector_search
+        )
         self.index_client.create_or_update_index(index)
 
     def _generate_document(self, vector, payload, id):
@@ -173,7 +206,8 @@ class AzureAISearch(VectorStoreBase):
         """
         logger.info(f"Inserting {len(vectors)} vectors into index {self.index_name}")
         documents = [
-            self._generate_document(vector, payload, id) for id, vector, payload in zip(ids, vectors, payloads)
+            self._generate_document(vector, payload, id)
+            for id, vector, payload in zip(ids, vectors, payloads)
         ]
         response = self.search_client.upload_documents(documents)
         for doc in response:
@@ -214,7 +248,9 @@ class AzureAISearch(VectorStoreBase):
         if filters:
             filter_expression = self._build_filter_expression(filters)
 
-        vector_query = VectorizedQuery(vector=vectors, k_nearest_neighbors=limit, fields="vector")
+        vector_query = VectorizedQuery(
+            vector=vectors, k_nearest_neighbors=limit, fields="vector"
+        )
         if self.hybrid_search:
             search_results = self.search_client.search(
                 search_text=query,
@@ -235,7 +271,11 @@ class AzureAISearch(VectorStoreBase):
         results = []
         for result in search_results:
             payload = json.loads(extract_json(result["payload"]))
-            results.append(OutputData(id=result["id"], score=result["@search.score"], payload=payload))
+            results.append(
+                OutputData(
+                    id=result["id"], score=result["@search.score"], payload=payload
+                )
+            )
         return results
 
     def delete(self, vector_id):
@@ -249,7 +289,9 @@ class AzureAISearch(VectorStoreBase):
         for doc in response:
             if not hasattr(doc, "status_code") and doc.get("status_code") != 200:
                 raise Exception(f"Delete failed for document {vector_id}: {doc}")
-        logger.info(f"Deleted document with ID '{vector_id}' from index '{self.index_name}'.")
+        logger.info(
+            f"Deleted document with ID '{vector_id}' from index '{self.index_name}'."
+        )
         return response
 
     def update(self, vector_id, vector=None, payload=None):
@@ -334,11 +376,17 @@ class AzureAISearch(VectorStoreBase):
         if filters:
             filter_expression = self._build_filter_expression(filters)
 
-        search_results = self.search_client.search(search_text="*", filter=filter_expression, top=limit)
+        search_results = self.search_client.search(
+            search_text="*", filter=filter_expression, top=limit
+        )
         results = []
         for result in search_results:
             payload = json.loads(extract_json(result["payload"]))
-            results.append(OutputData(id=result["id"], score=result["@search.score"], payload=payload))
+            results.append(
+                OutputData(
+                    id=result["id"], score=result["@search.score"], payload=payload
+                )
+            )
         return [results]
 
     def __del__(self):
@@ -360,14 +408,16 @@ class AzureAISearch(VectorStoreBase):
 
             # Reinitialize the clients
             service_endpoint = f"https://{self.service_name}.search.windows.net"
+            credential = self._create_credential()
+
             self.search_client = SearchClient(
                 endpoint=service_endpoint,
                 index_name=self.index_name,
-                credential=AzureKeyCredential(self.api_key),
+                credential=credential,
             )
             self.index_client = SearchIndexClient(
                 endpoint=service_endpoint,
-                credential=AzureKeyCredential(self.api_key),
+                credential=credential,
             )
 
             # Add user agent

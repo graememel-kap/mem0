@@ -4,7 +4,9 @@ from typing import Dict, List, Optional, Union
 try:
     import anthropic
 except ImportError:
-    raise ImportError("The 'anthropic' library is required. Please install it using 'pip install anthropic'.")
+    raise ImportError(
+        "The 'anthropic' library is required. Please install it using 'pip install anthropic'."
+    )
 
 from mem0.configs.llms.anthropic import AnthropicConfig
 from mem0.configs.llms.base import BaseLlmConfig
@@ -12,13 +14,17 @@ from mem0.llms.base import LLMBase
 
 
 class AnthropicLLM(LLMBase):
-    def __init__(self, config: Optional[Union[BaseLlmConfig, AnthropicConfig, Dict]] = None):
+    def __init__(
+        self, config: Optional[Union[BaseLlmConfig, AnthropicConfig, Dict]] = None
+    ):
         # Convert to AnthropicConfig if needed
         if config is None:
             config = AnthropicConfig()
         elif isinstance(config, dict):
             config = AnthropicConfig(**config)
-        elif isinstance(config, BaseLlmConfig) and not isinstance(config, AnthropicConfig):
+        elif isinstance(config, BaseLlmConfig) and not isinstance(
+            config, AnthropicConfig
+        ):
             # Convert BaseLlmConfig to AnthropicConfig
             config = AnthropicConfig(
                 model=config.model,
@@ -39,6 +45,12 @@ class AnthropicLLM(LLMBase):
 
         api_key = self.config.api_key or os.getenv("ANTHROPIC_API_KEY")
         self.client = anthropic.Anthropic(api_key=api_key)
+
+        # Apply rate limiting to the client's messages.create method
+        self._original_messages_create = self.client.messages.create
+        self.client.messages.create = self._apply_rate_limiting(
+            self._original_messages_create
+        )
 
     def generate_response(
         self,
@@ -79,7 +91,9 @@ class AnthropicLLM(LLMBase):
             }
         )
 
-        if tools:  # TODO: Remove tools if no issues found with new memory addition logic
+        if (
+            tools
+        ):  # TODO: Remove tools if no issues found with new memory addition logic
             params["tools"] = tools
             params["tool_choice"] = tool_choice
 

@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Union
 
 from mem0.configs.llms.base import BaseLlmConfig
+from mem0.llms.rate_limit import (
+    with_rate_limit_handling,
+    get_provider_rate_limit_config,
+    RateLimitManager,
+)
 
 
 class LLMBase(ABC):
@@ -27,6 +32,34 @@ class LLMBase(ABC):
         # Validate configuration
         self._validate_config()
 
+        # Initialize rate limiting
+        self._setup_rate_limiting()
+
+    def _setup_rate_limiting(self):
+        """
+        Setup rate limiting for the LLM provider.
+        """
+        provider_name = self.__class__.__name__.lower().replace("llm", "")
+        rate_limit_config = get_provider_rate_limit_config(provider_name)
+
+        # Allow override from config
+        if hasattr(self.config, "rate_limit_config") and self.config.rate_limit_config:
+            rate_limit_config.update(self.config.rate_limit_config)
+
+        self.rate_limit_manager = RateLimitManager(rate_limit_config)
+
+    def _apply_rate_limiting(self, func):
+        """
+        Apply rate limiting to a function.
+
+        Args:
+            func: Function to wrap with rate limiting
+
+        Returns:
+            Rate limited function
+        """
+        return self.rate_limit_manager.apply_rate_limiting(func)
+
     def _validate_config(self):
         """
         Validate the configuration.
@@ -43,43 +76,51 @@ class LLMBase(ABC):
     def _is_reasoning_model(self, model: str) -> bool:
         """
         Check if the model is a reasoning model or GPT-5 series that doesn't support certain parameters.
-        
+
         Args:
             model: The model name to check
-            
+
         Returns:
             bool: True if the model is a reasoning model or GPT-5 series
         """
         reasoning_models = {
-            "o1", "o1-preview", "o3-mini", "o3",
-            "gpt-5", "gpt-5o", "gpt-5o-mini", "gpt-5o-micro",
+            "o1",
+            "o1-preview",
+            "o3-mini",
+            "o3",
+            "gpt-5",
+            "gpt-5o",
+            "gpt-5o-mini",
+            "gpt-5o-micro",
         }
-        
+
         if model.lower() in reasoning_models:
             return True
-        
+
         model_lower = model.lower()
-        if any(reasoning_model in model_lower for reasoning_model in ["gpt-5", "o1", "o3"]):
+        if any(
+            reasoning_model in model_lower for reasoning_model in ["gpt-5", "o1", "o3"]
+        ):
             return True
-            
+
         return False
 
     def _get_supported_params(self, **kwargs) -> Dict:
         """
         Get parameters that are supported by the current model.
         Filters out unsupported parameters for reasoning models and GPT-5 series.
-        
+
         Args:
             **kwargs: Additional parameters to include
-            
+
         Returns:
             Dict: Filtered parameters dictionary
         """
-        model = getattr(self.config, 'model', '')
-        
+        model = getattr(self.config, "model", "")
+
         if self._is_reasoning_model(model):
             supported_params = {}
-            
+
             if "messages" in kwargs:
                 supported_params["messages"] = kwargs["messages"]
             if "response_format" in kwargs:
@@ -88,7 +129,7 @@ class LLMBase(ABC):
                 supported_params["tools"] = kwargs["tools"]
             if "tool_choice" in kwargs:
                 supported_params["tool_choice"] = kwargs["tool_choice"]
-                
+
             return supported_params
         else:
             # For regular models, include all common parameters
@@ -96,7 +137,11 @@ class LLMBase(ABC):
 
     @abstractmethod
     def generate_response(
-        self, messages: List[Dict[str, str]], tools: Optional[List[Dict]] = None, tool_choice: str = "auto", **kwargs
+        self,
+        messages: List[Dict[str, str]],
+        tools: Optional[List[Dict]] = None,
+        tool_choice: str = "auto",
+        **kwargs,
     ):
         """
         Generate a response based on the given messages.

@@ -25,10 +25,20 @@ class SarvamLLM(LLMBase):
 
         # Set base URL - use config value or environment or default
         self.base_url = (
-            getattr(self.config, "sarvam_base_url", None) or os.getenv("SARVAM_API_BASE") or "https://api.sarvam.ai/v1"
+            getattr(self.config, "sarvam_base_url", None)
+            or os.getenv("SARVAM_API_BASE")
+            or "https://api.sarvam.ai/v1"
         )
 
-    def generate_response(self, messages: List[Dict[str, str]], response_format=None) -> str:
+        # Apply rate limiting to requests.post for API calls
+        self._original_requests_post = requests.post
+        self._rate_limited_requests_post = self._apply_rate_limiting(
+            self._original_requests_post
+        )
+
+    def generate_response(
+        self, messages: List[Dict[str, str]], response_format=None
+    ) -> str:
         """
         Generate a response based on the given messages using Sarvam-M.
 
@@ -42,12 +52,17 @@ class SarvamLLM(LLMBase):
         """
         url = f"{self.base_url}/chat/completions"
 
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
 
         # Prepare the request payload
         params = {
             "messages": messages,
-            "model": self.config.model if isinstance(self.config.model, str) else "sarvam-m",
+            "model": (
+                self.config.model if isinstance(self.config.model, str) else "sarvam-m"
+            ),
         }
 
         # Add standard parameters that already exist in BaseLlmConfig
@@ -66,14 +81,23 @@ class SarvamLLM(LLMBase):
             params["model"] = self.config.model.get("name", "sarvam-m")
 
             # Add Sarvam-specific parameters
-            sarvam_specific_params = ["reasoning_effort", "frequency_penalty", "presence_penalty", "seed", "stop", "n"]
+            sarvam_specific_params = [
+                "reasoning_effort",
+                "frequency_penalty",
+                "presence_penalty",
+                "seed",
+                "stop",
+                "n",
+            ]
 
             for param in sarvam_specific_params:
                 if param in self.config.model:
                     params[param] = self.config.model[param]
 
         try:
-            response = requests.post(url, headers=headers, json=params, timeout=30)
+            response = self._rate_limited_requests_post(
+                url, headers=headers, json=params, timeout=30
+            )
             response.raise_for_status()
 
             result = response.json()

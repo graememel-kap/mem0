@@ -12,7 +12,9 @@ from mem0.memory.utils import extract_json
 
 
 class OpenAILLM(LLMBase):
-    def __init__(self, config: Optional[Union[BaseLlmConfig, OpenAIConfig, Dict]] = None):
+    def __init__(
+        self, config: Optional[Union[BaseLlmConfig, OpenAIConfig, Dict]] = None
+    ):
         # Convert to OpenAIConfig if needed
         if config is None:
             config = OpenAIConfig()
@@ -46,9 +48,19 @@ class OpenAILLM(LLMBase):
             )
         else:
             api_key = self.config.api_key or os.getenv("OPENAI_API_KEY")
-            base_url = self.config.openai_base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            base_url = (
+                self.config.openai_base_url
+                or os.getenv("OPENAI_BASE_URL")
+                or "https://api.openai.com/v1"
+            )
 
             self.client = OpenAI(api_key=api_key, base_url=base_url)
+
+        # Apply rate limiting to the client's completion method
+        self._original_completion_create = self.client.chat.completions.create
+        self.client.chat.completions.create = self._apply_rate_limiting(
+            self._original_completion_create
+        )
 
     def _parse_response(self, response, tools):
         """
@@ -72,7 +84,9 @@ class OpenAILLM(LLMBase):
                     processed_response["tool_calls"].append(
                         {
                             "name": tool_call.function.name,
-                            "arguments": json.loads(extract_json(tool_call.function.arguments)),
+                            "arguments": json.loads(
+                                extract_json(tool_call.function.arguments)
+                            ),
                         }
                     )
 
@@ -102,11 +116,13 @@ class OpenAILLM(LLMBase):
             json: The generated response.
         """
         params = self._get_supported_params(messages=messages, **kwargs)
-        
-        params.update({
-            "model": self.config.model,
-            "messages": messages,
-        })
+
+        params.update(
+            {
+                "model": self.config.model,
+                "messages": messages,
+            }
+        )
 
         if os.getenv("OPENROUTER_API_KEY"):
             openrouter_params = {}
@@ -126,7 +142,9 @@ class OpenAILLM(LLMBase):
 
         if response_format:
             params["response_format"] = response_format
-        if tools:  # TODO: Remove tools if no issues found with new memory addition logic
+        if (
+            tools
+        ):  # TODO: Remove tools if no issues found with new memory addition logic
             params["tools"] = tools
             params["tool_choice"] = tool_choice
         response = self.client.chat.completions.create(**params)

@@ -11,13 +11,17 @@ from mem0.memory.utils import extract_json
 
 
 class DeepSeekLLM(LLMBase):
-    def __init__(self, config: Optional[Union[BaseLlmConfig, DeepSeekConfig, Dict]] = None):
+    def __init__(
+        self, config: Optional[Union[BaseLlmConfig, DeepSeekConfig, Dict]] = None
+    ):
         # Convert to DeepSeekConfig if needed
         if config is None:
             config = DeepSeekConfig()
         elif isinstance(config, dict):
             config = DeepSeekConfig(**config)
-        elif isinstance(config, BaseLlmConfig) and not isinstance(config, DeepSeekConfig):
+        elif isinstance(config, BaseLlmConfig) and not isinstance(
+            config, DeepSeekConfig
+        ):
             # Convert BaseLlmConfig to DeepSeekConfig
             config = DeepSeekConfig(
                 model=config.model,
@@ -37,8 +41,18 @@ class DeepSeekLLM(LLMBase):
             self.config.model = "deepseek-chat"
 
         api_key = self.config.api_key or os.getenv("DEEPSEEK_API_KEY")
-        base_url = self.config.deepseek_base_url or os.getenv("DEEPSEEK_API_BASE") or "https://api.deepseek.com"
+        base_url = (
+            self.config.deepseek_base_url
+            or os.getenv("DEEPSEEK_API_BASE")
+            or "https://api.deepseek.com"
+        )
         self.client = OpenAI(api_key=api_key, base_url=base_url)
+
+        # Apply rate limiting to the client's completion method
+        self._original_completion_create = self.client.chat.completions.create
+        self.client.chat.completions.create = self._apply_rate_limiting(
+            self._original_completion_create
+        )
 
     def _parse_response(self, response, tools):
         """
@@ -62,7 +76,9 @@ class DeepSeekLLM(LLMBase):
                     processed_response["tool_calls"].append(
                         {
                             "name": tool_call.function.name,
-                            "arguments": json.loads(extract_json(tool_call.function.arguments)),
+                            "arguments": json.loads(
+                                extract_json(tool_call.function.arguments)
+                            ),
                         }
                     )
 

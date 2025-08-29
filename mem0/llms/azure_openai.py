@@ -11,13 +11,17 @@ from mem0.memory.utils import extract_json
 
 
 class AzureOpenAILLM(LLMBase):
-    def __init__(self, config: Optional[Union[BaseLlmConfig, AzureOpenAIConfig, Dict]] = None):
+    def __init__(
+        self, config: Optional[Union[BaseLlmConfig, AzureOpenAIConfig, Dict]] = None
+    ):
         # Convert to AzureOpenAIConfig if needed
         if config is None:
             config = AzureOpenAIConfig()
         elif isinstance(config, dict):
             config = AzureOpenAIConfig(**config)
-        elif isinstance(config, BaseLlmConfig) and not isinstance(config, AzureOpenAIConfig):
+        elif isinstance(config, BaseLlmConfig) and not isinstance(
+            config, AzureOpenAIConfig
+        ):
             # Convert BaseLlmConfig to AzureOpenAIConfig
             config = AzureOpenAIConfig(
                 model=config.model,
@@ -37,10 +41,18 @@ class AzureOpenAILLM(LLMBase):
         if not self.config.model:
             self.config.model = "gpt-4o"
 
-        api_key = self.config.azure_kwargs.api_key or os.getenv("LLM_AZURE_OPENAI_API_KEY")
-        azure_deployment = self.config.azure_kwargs.azure_deployment or os.getenv("LLM_AZURE_DEPLOYMENT")
-        azure_endpoint = self.config.azure_kwargs.azure_endpoint or os.getenv("LLM_AZURE_ENDPOINT")
-        api_version = self.config.azure_kwargs.api_version or os.getenv("LLM_AZURE_API_VERSION")
+        api_key = self.config.azure_kwargs.api_key or os.getenv(
+            "LLM_AZURE_OPENAI_API_KEY"
+        )
+        azure_deployment = self.config.azure_kwargs.azure_deployment or os.getenv(
+            "LLM_AZURE_DEPLOYMENT"
+        )
+        azure_endpoint = self.config.azure_kwargs.azure_endpoint or os.getenv(
+            "LLM_AZURE_ENDPOINT"
+        )
+        api_version = self.config.azure_kwargs.api_version or os.getenv(
+            "LLM_AZURE_API_VERSION"
+        )
         default_headers = self.config.azure_kwargs.default_headers
 
         self.client = AzureOpenAI(
@@ -50,6 +62,12 @@ class AzureOpenAILLM(LLMBase):
             api_key=api_key,
             http_client=self.config.http_client,
             default_headers=default_headers,
+        )
+
+        # Apply rate limiting to the client's completion method
+        self._original_completion_create = self.client.chat.completions.create
+        self.client.chat.completions.create = self._apply_rate_limiting(
+            self._original_completion_create
         )
 
     def _parse_response(self, response, tools):
@@ -74,7 +92,9 @@ class AzureOpenAILLM(LLMBase):
                     processed_response["tool_calls"].append(
                         {
                             "name": tool_call.function.name,
-                            "arguments": json.loads(extract_json(tool_call.function.arguments)),
+                            "arguments": json.loads(
+                                extract_json(tool_call.function.arguments)
+                            ),
                         }
                     )
 
@@ -111,12 +131,14 @@ class AzureOpenAILLM(LLMBase):
         messages[-1]["content"] = user_prompt
 
         params = self._get_supported_params(messages=messages, **kwargs)
-        
+
         # Add model and messages
-        params.update({
-            "model": self.config.model,
-            "messages": messages,
-        })
+        params.update(
+            {
+                "model": self.config.model,
+                "messages": messages,
+            }
+        )
 
         if tools:
             params["tools"] = tools

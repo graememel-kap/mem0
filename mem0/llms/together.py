@@ -5,7 +5,9 @@ from typing import Dict, List, Optional
 try:
     from together import Together
 except ImportError:
-    raise ImportError("The 'together' library is required. Please install it using 'pip install together'.")
+    raise ImportError(
+        "The 'together' library is required. Please install it using 'pip install together'."
+    )
 
 from mem0.configs.llms.base import BaseLlmConfig
 from mem0.llms.base import LLMBase
@@ -21,6 +23,12 @@ class TogetherLLM(LLMBase):
 
         api_key = self.config.api_key or os.getenv("TOGETHER_API_KEY")
         self.client = Together(api_key=api_key)
+
+        # Apply rate limiting to the client's completion method
+        self._original_completion_create = self.client.chat.completions.create
+        self.client.chat.completions.create = self._apply_rate_limiting(
+            self._original_completion_create
+        )
 
     def _parse_response(self, response, tools):
         """
@@ -44,7 +52,9 @@ class TogetherLLM(LLMBase):
                     processed_response["tool_calls"].append(
                         {
                             "name": tool_call.function.name,
-                            "arguments": json.loads(extract_json(tool_call.function.arguments)),
+                            "arguments": json.loads(
+                                extract_json(tool_call.function.arguments)
+                            ),
                         }
                     )
 
@@ -80,7 +90,9 @@ class TogetherLLM(LLMBase):
         }
         if response_format:
             params["response_format"] = response_format
-        if tools:  # TODO: Remove tools if no issues found with new memory addition logic
+        if (
+            tools
+        ):  # TODO: Remove tools if no issues found with new memory addition logic
             params["tools"] = tools
             params["tool_choice"] = tool_choice
 

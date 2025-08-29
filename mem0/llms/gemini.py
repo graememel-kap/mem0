@@ -5,7 +5,9 @@ try:
     from google import genai
     from google.genai import types
 except ImportError:
-    raise ImportError("The 'google-genai' library is required. Please install it using 'pip install google-genai'.")
+    raise ImportError(
+        "The 'google-genai' library is required. Please install it using 'pip install google-genai'."
+    )
 
 from mem0.configs.llms.base import BaseLlmConfig
 from mem0.llms.base import LLMBase
@@ -20,6 +22,12 @@ class GeminiLLM(LLMBase):
 
         api_key = self.config.api_key or os.getenv("GOOGLE_API_KEY")
         self.client = genai.Client(api_key=api_key)
+
+        # Apply rate limiting to the client's generate_content method
+        self._original_generate_content = self.client.models.generate_content
+        self.client.models.generate_content = self._apply_rate_limiting(
+            self._original_generate_content
+        )
 
     def _parse_response(self, response, tools):
         """
@@ -186,7 +194,9 @@ class GeminiLLM(LLMBase):
                     function_calling_config=types.FunctionCallingConfig(
                         mode=mode,
                         allowed_function_names=(
-                            [tool["function"]["name"] for tool in tools] if tool_choice == "any" else None
+                            [tool["function"]["name"] for tool in tools]
+                            if tool_choice == "any"
+                            else None
                         ),
                     )
                 )
